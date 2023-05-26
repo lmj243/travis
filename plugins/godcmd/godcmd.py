@@ -41,6 +41,18 @@ COMMANDS = {
         "alias": ["reset_openai_api_key"],
         "desc": "重置为默认的api_key",
     },
+    "set_gpt_model": {
+        "alias": ["set_gpt_model"],
+        "desc": "设置你的私有模型",
+    },
+    "reset_gpt_model": {
+        "alias": ["reset_gpt_model"],
+        "desc": "重置你的私有模型",
+    },
+    "gpt_model": {
+        "alias": ["gpt_model"],
+        "desc": "查询你使用的模型",
+    },
     "id": {
         "alias": ["id", "用户"],
         "desc": "获取用户id",  # wechaty和wechatmp的用户id不会变化，可用于绑定管理员
@@ -140,9 +152,7 @@ def get_help_text(isadmin, isgroup):
         if plugins[plugin].enabled and not plugins[plugin].hidden:
             namecn = plugins[plugin].namecn
             help_text += "\n%s:" % namecn
-            help_text += (
-                PluginManager().instances[plugin].get_help_text(verbose=False).strip()
-            )
+            help_text += PluginManager().instances[plugin].get_help_text(verbose=False).strip()
 
     if ADMIN_COMMANDS and isadmin:
         help_text += "\n\n管理员指令：\n"
@@ -191,9 +201,7 @@ class Godcmd(Plugin):
                     COMMANDS["reset"]["alias"].append(custom_command)
 
         self.password = gconf["password"]
-        self.admin_users = gconf[
-            "admin_users"
-        ]  # 预存的管理员账号，这些账号不需要认证。itchat的用户名每次都会变，不可用
+        self.admin_users = gconf["admin_users"]  # 预存的管理员账号，这些账号不需要认证。itchat的用户名每次都会变，不可用
         self.isrunning = True  # 机器人是否运行中
 
         self.handlers[Event.ON_HANDLE_CONTEXT] = self.on_handle_context
@@ -209,6 +217,13 @@ class Godcmd(Plugin):
         content = e_context["context"].content
         logger.debug("[Godcmd] on_handle_context. content: %s" % content)
         if content.startswith("#"):
+            if len(content) == 1:
+                reply = Reply()
+                reply.type = ReplyType.ERROR
+                reply.content = f"空指令，输入#help查看指令列表\n"
+                e_context["reply"] = reply
+                e_context.action = EventAction.BREAK_PASS
+                return
             # msg = e_context['context']['msg']
             channel = e_context["channel"]
             user = e_context["context"]["receiver"]
@@ -241,11 +256,7 @@ class Godcmd(Plugin):
                             if not plugincls.enabled:
                                 continue
                             if query_name == name or query_name == plugincls.namecn:
-                                ok, result = True, PluginManager().instances[
-                                    name
-                                ].get_help_text(
-                                    isgroup=isgroup, isadmin=isadmin, verbose=True
-                                )
+                                ok, result = True, PluginManager().instances[name].get_help_text(isgroup=isgroup, isadmin=isadmin, verbose=True)
                                 break
                         if not ok:
                             result = "插件不存在或未启用"
@@ -265,8 +276,28 @@ class Godcmd(Plugin):
                         ok, result = True, "你的OpenAI私有api_key已清除"
                     except Exception as e:
                         ok, result = False, "你没有设置私有api_key"
+                elif cmd == "set_gpt_model":
+                    if len(args) == 1:
+                        user_data = conf().get_user_data(user)
+                        user_data["gpt_model"] = args[0]
+                        ok, result = True, "你的GPT模型已设置为" + args[0]
+                    else:
+                        ok, result = False, "请提供一个GPT模型"
+                elif cmd == "gpt_model":
+                    user_data = conf().get_user_data(user)
+                    model = conf().get('model')
+                    if 'gpt_model' in user_data:
+                        model = user_data['gpt_model']
+                    ok, result = True, "你的GPT模型为" + str(model)
+                elif cmd == "reset_gpt_model":
+                    try:
+                        user_data = conf().get_user_data(user)
+                        user_data.pop("gpt_model")
+                        ok, result = True, "你的GPT模型已重置"
+                    except Exception as e:
+                        ok, result = False, "你没有设置私有GPT模型"
                 elif cmd == "reset":
-                    if bottype in (const.CHATGPT, const.OPEN_AI):
+                    if bottype in [const.OPEN_AI, const.CHATGPT, const.CHATGPTONAZURE]:
                         bot.sessions.clear_session(session_id)
                         channel.cancel_session(session_id)
                         ok, result = True, "会话已重置"
@@ -278,11 +309,7 @@ class Godcmd(Plugin):
                     if isgroup:
                         ok, result = False, "群聊不可执行管理员指令"
                     else:
-                        cmd = next(
-                            c
-                            for c, info in ADMIN_COMMANDS.items()
-                            if cmd in info["alias"]
-                        )
+                        cmd = next(c for c, info in ADMIN_COMMANDS.items() if cmd in info["alias"])
                         if cmd == "stop":
                             self.isrunning = False
                             ok, result = True, "服务已暂停"
@@ -293,7 +320,7 @@ class Godcmd(Plugin):
                             load_config()
                             ok, result = True, "配置已重载"
                         elif cmd == "resetall":
-                            if bottype in (const.CHATGPT, const.OPEN_AI):
+                            if bottype in [const.OPEN_AI, const.CHATGPT, const.CHATGPTONAZURE]:
                                 channel.cancel_all_session()
                                 bot.sessions.clear_all_session()
                                 ok, result = True, "重置所有会话成功"
@@ -318,18 +345,14 @@ class Godcmd(Plugin):
                             PluginManager().activate_plugins()
                             if len(new_plugins) > 0:
                                 result += "\n发现新插件：\n"
-                                result += "\n".join(
-                                    [f"{p.name}_v{p.version}" for p in new_plugins]
-                                )
+                                result += "\n".join([f"{p.name}_v{p.version}" for p in new_plugins])
                             else:
                                 result += ", 未发现新插件"
                         elif cmd == "setpri":
                             if len(args) != 2:
                                 ok, result = False, "请提供插件名和优先级"
                             else:
-                                ok = PluginManager().set_plugin_priority(
-                                    args[0], int(args[1])
-                                )
+                                ok = PluginManager().set_plugin_priority(args[0], int(args[1]))
                                 if ok:
                                     result = "插件" + args[0] + "优先级已设置为" + args[1]
                                 else:
